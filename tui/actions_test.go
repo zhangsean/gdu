@@ -1,14 +1,12 @@
 package tui
 
 import (
-	"runtime"
 	"testing"
 
 	"github.com/dundee/gdu/v5/internal/testanalyze"
 	"github.com/dundee/gdu/v5/internal/testapp"
 	"github.com/dundee/gdu/v5/internal/testdir"
 	"github.com/dundee/gdu/v5/pkg/analyze"
-	"github.com/dundee/gdu/v5/pkg/device"
 	"github.com/gdamore/tcell/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -18,7 +16,10 @@ func TestShowDevices(t *testing.T) {
 	defer simScreen.Fini()
 
 	ui := CreateUI(app, true, true)
-	ui.ListDevices(getDevicesInfoMock())
+	err := ui.ListDevices(getDevicesInfoMock())
+
+	assert.Nil(t, err)
+
 	ui.table.Draw(simScreen)
 	simScreen.Show()
 
@@ -35,7 +36,10 @@ func TestShowDevicesBW(t *testing.T) {
 	defer simScreen.Fini()
 
 	ui := CreateUI(app, false, false)
-	ui.ListDevices(getDevicesInfoMock())
+	err := ui.ListDevices(getDevicesInfoMock())
+
+	assert.Nil(t, err)
+
 	ui.table.Draw(simScreen)
 	simScreen.Show()
 
@@ -47,30 +51,15 @@ func TestShowDevicesBW(t *testing.T) {
 	}
 }
 
-func TestShowDevicesWithError(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		return
-	}
-
-	app, simScreen := testapp.CreateTestAppWithSimScreen(50, 50)
-	defer simScreen.Fini()
-
-	getter := device.LinuxDevicesInfoGetter{MountsPath: "/xyzxyz"}
-
-	ui := CreateUI(app, false, false)
-	err := ui.ListDevices(getter)
-
-	assert.Contains(t, err.Error(), "no such file")
-}
-
 func TestDeviceSelected(t *testing.T) {
 	app := testapp.CreateMockedApp(false)
 	ui := CreateUI(app, true, true)
 	ui.Analyzer = &testanalyze.MockedAnalyzer{}
 	ui.done = make(chan struct{})
 	ui.SetIgnoreDirPaths([]string{"/xxx"})
-	ui.ListDevices(getDevicesInfoMock())
+	err := ui.ListDevices(getDevicesInfoMock())
 
+	assert.Nil(t, err)
 	assert.Equal(t, 3, ui.table.GetRowCount())
 
 	ui.deviceItemSelected(1, 0)
@@ -126,7 +115,8 @@ func TestAnalyzePathWithParentDir(t *testing.T) {
 	ui.PathChecker = testdir.MockedPathChecker
 	ui.topDir = parentDir
 	ui.done = make(chan struct{})
-	ui.AnalyzePath("test_dir", parentDir)
+	err := ui.AnalyzePath("test_dir", parentDir)
+	assert.Nil(t, err)
 
 	<-ui.done // wait for analyzer
 
@@ -148,7 +138,8 @@ func TestViewDirContents(t *testing.T) {
 	ui.Analyzer = &testanalyze.MockedAnalyzer{}
 	ui.PathChecker = testdir.MockedPathChecker
 	ui.done = make(chan struct{})
-	ui.AnalyzePath("test_dir", nil)
+	err := ui.AnalyzePath("test_dir", nil)
+	assert.Nil(t, err)
 
 	<-ui.done // wait for analyzer
 
@@ -168,7 +159,8 @@ func TestViewContentsOfNotExistingFile(t *testing.T) {
 	ui.Analyzer = &testanalyze.MockedAnalyzer{}
 	ui.PathChecker = testdir.MockedPathChecker
 	ui.done = make(chan struct{})
-	ui.AnalyzePath("test_dir", nil)
+	err := ui.AnalyzePath("test_dir", nil)
+	assert.Nil(t, err)
 
 	<-ui.done // wait for analyzer
 
@@ -197,7 +189,8 @@ func TestViewFile(t *testing.T) {
 	app := testapp.CreateMockedApp(true)
 	ui := CreateUI(app, false, true)
 	ui.done = make(chan struct{})
-	ui.AnalyzePath("test_dir", nil)
+	err := ui.AnalyzePath("test_dir", nil)
+	assert.Nil(t, err)
 
 	<-ui.done // wait for analyzer
 
@@ -225,7 +218,8 @@ func TestShowInfo(t *testing.T) {
 	app := testapp.CreateMockedApp(true)
 	ui := CreateUI(app, false, true)
 	ui.done = make(chan struct{})
-	ui.AnalyzePath("test_dir", nil)
+	err := ui.AnalyzePath("test_dir", nil)
+	assert.Nil(t, err)
 
 	<-ui.done // wait for analyzer
 
@@ -254,7 +248,8 @@ func TestShowInfoBW(t *testing.T) {
 	app := testapp.CreateMockedApp(true)
 	ui := CreateUI(app, true, false)
 	ui.done = make(chan struct{})
-	ui.AnalyzePath("test_dir", nil)
+	err := ui.AnalyzePath("test_dir", nil)
+	assert.Nil(t, err)
 
 	<-ui.done // wait for analyzer
 
@@ -279,7 +274,8 @@ func TestExitViewFile(t *testing.T) {
 	app := testapp.CreateMockedApp(true)
 	ui := CreateUI(app, false, true)
 	ui.done = make(chan struct{})
-	ui.AnalyzePath("test_dir", nil)
+	err := ui.AnalyzePath("test_dir", nil)
+	assert.Nil(t, err)
 
 	<-ui.done // wait for analyzer
 
