@@ -2,12 +2,13 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"sort"
+	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 
+	"github.com/dundee/gdu/v5/build"
 	"github.com/dundee/gdu/v5/internal/common"
 	"github.com/dundee/gdu/v5/pkg/analyze"
 	"github.com/dundee/gdu/v5/pkg/device"
@@ -15,39 +16,27 @@ import (
 	"github.com/rivo/tview"
 )
 
-const helpTextColorized = `
-  [red]up, down, k, j    [white]Move cursor up/down
-[red]pgup, pgdn, g, G    [white]Move cursor top/bottom
- [red]enter, right, l    [white]Select directory/device
-         [red]left, h    [white]Go to parent directory
-			   [red]d    [white]Delete selected file or directory
-			   [red]e    [white]Empty selected file or directory
-			   [red]v    [white]Show content of selected file
-			   [red]i    [white]Show info about selected item
-			   [red]r    [white]Rescan current directory
-			   [red]a    [white]Toggle between showing disk usage and apparent size
-			   [red]c    [white]Show/hide file count
-			   [red]n    [white]Sort by name (asc/desc)
-			   [red]s    [white]Sort by size (asc/desc)
-			   [red]C    [white]Sort by file count (asc/desc)
-			   [red]q    [white]Quit gdu
-`
-const helpText = `
-  [::b]up, down, k, j    [white:black:-]Move cursor up/down
-[::b]pgup, pgdn, g, G    [white:black:-]Move cursor top/bottom
- [::b]enter, right, l    [white:black:-]Select directory/device
+const helpText = `    [::b]up/down, k/j    [white:black:-]Move cursor up/down
+  [::b]pgup/pgdn, g/G    [white:black:-]Move cursor top/bottom
+ [::b]enter, right, l    [white:black:-]Go to directory/device
          [::b]left, h    [white:black:-]Go to parent directory
-			   [::b]d    [white:black:-]Delete selected file or directory
-			   [::b]e    [white:black:-]Empty selected file or directory
-			   [::b]v    [white:black:-]Show content of selected file
-			   [::b]i    [white:black:-]Show info about selected item
-			   [::b]r    [white:black:-]Rescan current directory
-			   [::b]a    [white:black:-]Toggle between showing disk usage and apparent size
-			   [::b]c    [white:black:-]Show/hide file count
-			   [::b]n    [white:black:-]Sort by name (asc/desc)
-			   [::b]s    [white:black:-]Sort by size (asc/desc)
-			   [::b]C    [white:black:-]Sort by file count (asc/desc)
-			   [::b]q    [white:black:-]Quit gdu
+
+               [::b]r    [white:black:-]Rescan current directory
+               [::b]/    [white:black:-]Search items by name
+               [::b]a    [white:black:-]Toggle between showing disk usage and apparent size
+               [::b]c    [white:black:-]Show/hide file count
+               [::b]q    [white:black:-]Quit gdu
+
+Item under cursor:
+               [::b]d    [white:black:-]Delete file or directory
+               [::b]e    [white:black:-]Empty file or directory
+               [::b]v    [white:black:-]Show content of file
+               [::b]i    [white:black:-]Show info about item
+
+Sort by (twice toggles asc/desc):
+               [::b]n    [white:black:-]Sort by name (asc/desc)
+               [::b]s    [white:black:-]Sort by size (asc/desc)
+               [::b]C    [white:black:-]Sort by file count (asc/desc)
 `
 
 // UI struct
@@ -55,12 +44,14 @@ type UI struct {
 	*common.UI
 	app             common.TermApplication
 	header          *tview.TextView
-	footer          *tview.TextView
+	footer          *tview.Flex
+	footerLabel     *tview.TextView
 	currentDirLabel *tview.TextView
 	pages           *tview.Pages
 	progress        *tview.TextView
 	help            *tview.Flex
 	table           *tview.Table
+	filteringInput  *tview.InputField
 	currentDir      *analyze.Dir
 	devices         []*device.Device
 	topDir          *analyze.Dir
@@ -68,6 +59,8 @@ type UI struct {
 	currentDirPath  string
 	askBeforeDelete bool
 	showItemCount   bool
+	filtering       bool
+	filterValue     string
 	sortBy          string
 	sortOrder       string
 	done            chan struct{}
@@ -82,7 +75,6 @@ func CreateUI(app common.TermApplication, useColors bool, showApparentSize bool)
 			UseColors:        useColors,
 			ShowApparentSize: showApparentSize,
 			Analyzer:         analyze.CreateAnalyzer(),
-			PathChecker:      os.Stat,
 		},
 		askBeforeDelete: true,
 		showItemCount:   false,
@@ -131,10 +123,13 @@ func CreateUI(app common.TermApplication, useColors bool, showApparentSize bool)
 			Background(tcell.ColorGray).Bold(true))
 	}
 
-	ui.footer = tview.NewTextView().SetDynamicColors(true)
-	ui.footer.SetTextColor(textColor)
-	ui.footer.SetBackgroundColor(textBgColor)
-	ui.footer.SetText(" No items to display. ")
+	ui.footerLabel = tview.NewTextView().SetDynamicColors(true)
+	ui.footerLabel.SetTextColor(textColor)
+	ui.footerLabel.SetBackgroundColor(textBgColor)
+	ui.footerLabel.SetText(" No items to display. ")
+
+	ui.footer = tview.NewFlex()
+	ui.footer.AddItem(ui.footerLabel, 0, 1, false)
 
 	grid := tview.NewGrid().SetRows(1, 1, 0, 1).SetColumns(0)
 	grid.AddItem(ui.header, 0, 0, 1, 1, 0, 0, false).
@@ -158,12 +153,23 @@ func (ui *UI) StartUILoop() error {
 
 func (ui *UI) rescanDir() {
 	ui.Analyzer.ResetProgress()
-	ui.AnalyzePath(ui.currentDirPath, ui.currentDir.Parent)
+	err := ui.AnalyzePath(ui.currentDirPath, ui.currentDir.Parent)
+	if err != nil {
+		ui.showErr("Error rescanning path", err)
+	}
 }
 
 func (ui *UI) showDir() {
+	var (
+		totalUsage int64
+		totalSize  int64
+		itemCount  int
+	)
+
 	ui.currentDirPath = ui.currentDir.GetPath()
-	ui.currentDirLabel.SetText("[::b] --- " + ui.currentDirPath + " ---").SetDynamicColors(true)
+	ui.currentDirLabel.SetText("[::b] --- " +
+		strings.TrimPrefix(ui.currentDirPath, build.RootPathPrefix) +
+		" ---").SetDynamicColors(true)
 
 	ui.table.Clear()
 
@@ -179,6 +185,17 @@ func (ui *UI) showDir() {
 	ui.sortItems()
 
 	for i, item := range ui.currentDir.Files {
+		if ui.filterValue != "" && !strings.Contains(
+			strings.ToLower(item.GetName()),
+			strings.ToLower(ui.filterValue),
+		) {
+			continue
+		}
+
+		totalUsage += item.GetUsage()
+		totalSize += item.GetSize()
+		itemCount += item.GetItemCount()
+
 		cell := tview.NewTableCell(ui.formatFileRow(item))
 		cell.SetStyle(tcell.Style{}.Foreground(tcell.ColorDefault))
 		cell.SetReference(ui.currentDir.Files[i])
@@ -196,20 +213,23 @@ func (ui *UI) showDir() {
 		footerTextColor = "[black:white:-]"
 	}
 
-	ui.footer.SetText(
+	ui.footerLabel.SetText(
 		" Total disk usage: " +
 			footerNumberColor +
-			ui.formatSize(ui.currentDir.Usage, true, false) +
+			ui.formatSize(totalUsage, true, false) +
 			" Apparent size: " +
 			footerNumberColor +
-			ui.formatSize(ui.currentDir.Size, true, false) +
-			" Items: " + footerNumberColor + fmt.Sprint(ui.currentDir.ItemCount) +
+			ui.formatSize(totalSize, true, false) +
+			" Items: " + footerNumberColor + fmt.Sprint(itemCount) +
 			footerTextColor +
 			" Sorting by: " + ui.sortBy + " " + ui.sortOrder)
 
 	ui.table.Select(0, 0)
 	ui.table.ScrollToBeginning()
-	ui.app.SetFocus(ui.table)
+
+	if !ui.filtering {
+		ui.app.SetFocus(ui.table)
+	}
 }
 
 func (ui *UI) sortItems() {
@@ -252,6 +272,7 @@ func (ui *UI) fileItemSelected(row, column int) {
 	}
 
 	ui.currentDir = selectedDir.(*analyze.Dir)
+	ui.hideFilterInput()
 	ui.showDir()
 
 	if selectedDir == origDir.Parent {
@@ -274,7 +295,10 @@ func (ui *UI) deviceItemSelected(row, column int) {
 		log.Printf("Creating path patterns for other devices failed: %s", paths)
 	}
 
-	ui.AnalyzePath(selectedDevice.MountPoint, nil)
+	err = ui.AnalyzePath(selectedDevice.MountPoint, nil)
+	if err != nil {
+		ui.showErr("Error analyzing device", err)
+	}
 }
 
 func (ui *UI) confirmDeletion(shouldEmpty bool) {
@@ -361,7 +385,7 @@ func (ui *UI) updateProgress() {
 			ui.app.QueueUpdateDraw(func() {
 				ui.progress.SetText("Total items: " +
 					color +
-					fmt.Sprint(itemCount) +
+					common.FormatNumber(int64(itemCount)) +
 					"[white:black:-] size: " +
 					color +
 					ui.formatSize(totalSize, false, false) +
@@ -381,7 +405,13 @@ func (ui *UI) showHelp() {
 	text.SetTitle(" gdu help ")
 
 	if ui.UseColors {
-		text.SetText(helpTextColorized)
+		text.SetText(
+			strings.ReplaceAll(
+				strings.ReplaceAll(helpText, "[::b]", "[red]"),
+				"[white:black:-]",
+				"[white]",
+			),
+		)
 	} else {
 		text.SetText(helpText)
 	}
@@ -390,7 +420,7 @@ func (ui *UI) showHelp() {
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(nil, 0, 1, false).
-			AddItem(text, 21, 1, false).
+			AddItem(text, 27, 1, false).
 			AddItem(nil, 0, 1, false), 80, 1, false).
 		AddItem(nil, 0, 1, false)
 

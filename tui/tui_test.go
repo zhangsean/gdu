@@ -48,12 +48,12 @@ func TestFooter(t *testing.T) {
 	ui.showDir()
 	ui.pages.HidePage("progress")
 
-	ui.footer.Draw(simScreen)
+	ui.footerLabel.Draw(simScreen)
 	simScreen.Show()
 
 	b, _, _ := simScreen.GetContents()
 
-	text := []byte(" Total disk usage: 4.0 KiB Apparent size: 5 B Items: 2")
+	text := []byte(" Total disk usage: 4.0 KiB Apparent size: 2 B Items: 1")
 	for i, r := range b {
 		if i >= len(text) {
 			break
@@ -85,6 +85,8 @@ func TestHelp(t *testing.T) {
 	ui.help.Draw(simScreen)
 	simScreen.Show()
 
+	// printScreen(simScreen)
+
 	b, _, _ := simScreen.GetContents()
 
 	cells := b[356 : 356+9]
@@ -103,6 +105,8 @@ func TestHelpBw(t *testing.T) {
 	ui.showHelp()
 	ui.help.Draw(simScreen)
 	simScreen.Show()
+
+	// printScreen(simScreen)
 
 	b, _, _ := simScreen.GetContents()
 
@@ -185,11 +189,10 @@ func TestDirSelected(t *testing.T) {
 func TestFileSelected(t *testing.T) {
 	ui := getAnalyzedPathMockedApp(t, true, true, true)
 
-	ui.fileItemSelected(4, 0)
+	ui.fileItemSelected(3, 0)
 
-	assert.Equal(t, 5, ui.table.GetRowCount())
-	assert.Contains(t, ui.table.GetCell(0, 0).Text, "/..")
-	assert.Contains(t, ui.table.GetCell(1, 0).Text, "aaa")
+	assert.Equal(t, 4, ui.table.GetRowCount())
+	assert.Contains(t, ui.table.GetCell(0, 0).Text, "aaa")
 }
 
 func TestBeforeDraw(t *testing.T) {
@@ -312,22 +315,13 @@ func TestMin(t *testing.T) {
 	assert.Equal(t, 3, min(4, 3))
 }
 
-func printScreen(simScreen tcell.SimulationScreen) {
-	b, _, _ := simScreen.GetContents()
+// func printScreen(simScreen tcell.SimulationScreen) {
+// 	b, _, _ := simScreen.GetContents()
 
-	for i, r := range b {
-		println(i, string(r.Bytes))
-	}
-}
-
-func analyzeMock(path string, progress *analyze.CurrentProgress, ignore analyze.ShouldDirBeIgnored) *analyze.Dir {
-	return &analyze.Dir{
-		File: &analyze.File{
-			Name: "xxx",
-		},
-		BasePath: ".",
-	}
-}
+// 	for i, r := range b {
+// 		println(i, string(r.Bytes))
+// 	}
+// }
 
 func getDevicesInfoMock() device.DevicesInfoGetter {
 	item := &device.Device{
@@ -351,13 +345,13 @@ func getDevicesInfoMock() device.DevicesInfoGetter {
 func getAnalyzedPathMockedApp(t *testing.T, useColors, apparentSize bool, mockedAnalyzer bool) *UI {
 	app := testapp.CreateMockedApp(true)
 	ui := CreateUI(app, useColors, apparentSize)
-	ui.PathChecker = testdir.MockedPathChecker
 
 	if mockedAnalyzer {
 		ui.Analyzer = &testanalyze.MockedAnalyzer{}
 	}
 	ui.done = make(chan struct{})
-	ui.AnalyzePath("test_dir", nil)
+	err := ui.AnalyzePath("test_dir", nil)
+	assert.Nil(t, err)
 
 	<-ui.done // wait for analyzer
 
