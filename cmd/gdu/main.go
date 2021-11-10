@@ -39,6 +39,7 @@ func init() {
 
 	flags.StringSliceVarP(&af.IgnoreDirs, "ignore-dirs", "i", []string{"/proc", "/dev", "/sys", "/run"}, "Absolute paths to ignore (separated by comma)")
 	flags.StringSliceVarP(&af.IgnoreDirPatterns, "ignore-dirs-pattern", "I", []string{}, "Absolute path patterns to ignore (separated by comma)")
+	flags.StringVarP(&af.IgnoreFromFile, "ignore-from", "X", "", "Read absolute path patterns to ignore from file")
 	flags.BoolVarP(&af.NoHidden, "no-hidden", "H", false, "Ignore hidden directories (beginning with dot)")
 	flags.BoolVarP(&af.NoCross, "no-cross", "x", false, "Do not cross filesystem boundaries")
 
@@ -47,10 +48,16 @@ func init() {
 	flags.BoolVarP(&af.NoColor, "no-color", "c", false, "Do not use colorized output")
 	flags.BoolVarP(&af.NonInteractive, "non-interactive", "n", false, "Do not run in interactive mode")
 	flags.BoolVarP(&af.NoProgress, "no-progress", "p", false, "Do not show progress in non-interactive mode")
-
+	flags.BoolVarP(&af.Summarize, "summarize", "s", false, "Show only a total in non-interactive mode")
 }
 
 func runE(command *cobra.Command, args []string) error {
+	var (
+		termApp *tview.Application
+		screen  tcell.Screen
+		err     error
+	)
+
 	istty := isatty.IsTerminal(os.Stdout.Fd())
 
 	// we are not able to analyze disk usage on Windows and Plan9
@@ -61,10 +68,8 @@ func runE(command *cobra.Command, args []string) error {
 		af.LogFile = "nul"
 	}
 
-	var termApp *tview.Application
-
 	if !af.ShowVersion && !af.NonInteractive && istty && af.OutputFile == "" {
-		screen, err := tcell.NewScreen()
+		screen, err = tcell.NewScreen()
 		if err != nil {
 			return fmt.Errorf("Error creating screen: %w", err)
 		}
@@ -85,6 +90,7 @@ func runE(command *cobra.Command, args []string) error {
 		Istty:       istty,
 		Writer:      os.Stdout,
 		TermApp:     termApp,
+		Screen:      screen,
 		Getter:      device.Getter,
 		PathChecker: os.Stat,
 	}

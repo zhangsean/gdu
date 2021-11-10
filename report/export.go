@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -83,7 +85,9 @@ func (ui *UI) AnalyzePath(path string, _ *analyze.Dir) error {
 	wait.Add(1)
 	go func() {
 		defer wait.Done()
+		defer debug.SetGCPercent(debug.SetGCPercent(-1))
 		dir = ui.Analyzer.AnalyzeDir(path, ui.CreateIgnoreFunc())
+		dir.UpdateStats(make(analyze.HardLinkedItems, 10))
 	}()
 
 	wait.Wait()
@@ -95,7 +99,7 @@ func (ui *UI) AnalyzePath(path string, _ *analyze.Dir) error {
 	buff.Write([]byte(`[1,2,{"progname":"gdu","progver":"`))
 	buff.Write([]byte(build.Version))
 	buff.Write([]byte(`","timestamp":`))
-	buff.Write([]byte(fmt.Sprint(time.Now().Unix())))
+	buff.Write([]byte(strconv.FormatInt(time.Now().Unix(), 10)))
 	buff.Write([]byte("},\n"))
 
 	if err = dir.EncodeJSON(&buff, true); err != nil {
@@ -110,7 +114,10 @@ func (ui *UI) AnalyzePath(path string, _ *analyze.Dir) error {
 
 	switch f := ui.exportOutput.(type) {
 	case *os.File:
-		f.Close()
+		err = f.Close()
+		if err != nil {
+			return err
+		}
 	}
 
 	if ui.ShowProgress {

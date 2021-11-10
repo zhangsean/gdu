@@ -5,6 +5,7 @@ import (
 	"io"
 	"math"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -19,16 +20,23 @@ import (
 // UI struct
 type UI struct {
 	*common.UI
-	output io.Writer
-	red    *color.Color
-	orange *color.Color
-	blue   *color.Color
+	output    io.Writer
+	red       *color.Color
+	orange    *color.Color
+	blue      *color.Color
+	summarize bool
 }
 
 var progressRunes = []rune(`⠇⠏⠋⠙⠹⠸⠼⠴⠦⠧`)
 
 // CreateStdoutUI creates UI for stdout
-func CreateStdoutUI(output io.Writer, useColors bool, showProgress bool, showApparentSize bool) *UI {
+func CreateStdoutUI(
+	output io.Writer,
+	useColors bool,
+	showProgress bool,
+	showApparentSize bool,
+	summarize bool,
+) *UI {
 	ui := &UI{
 		UI: &common.UI{
 			UseColors:        useColors,
@@ -36,7 +44,8 @@ func CreateStdoutUI(output io.Writer, useColors bool, showProgress bool, showApp
 			ShowApparentSize: showApparentSize,
 			Analyzer:         analyze.CreateAnalyzer(),
 		},
-		output: output,
+		output:    output,
+		summarize: summarize,
 	}
 
 	ui.red = color.New(color.FgRed).Add(color.Bold)
@@ -131,12 +140,18 @@ func (ui *UI) AnalyzePath(path string, _ *analyze.Dir) error {
 	wait.Add(1)
 	go func() {
 		defer wait.Done()
+		defer debug.SetGCPercent(debug.SetGCPercent(-1))
 		dir = ui.Analyzer.AnalyzeDir(path, ui.CreateIgnoreFunc())
+		dir.UpdateStats(make(analyze.HardLinkedItems, 10))
 	}()
 
 	wait.Wait()
 
-	ui.showDir(dir)
+	if ui.summarize {
+		ui.printTotalItem(dir)
+	} else {
+		ui.showDir(dir)
+	}
 
 	return nil
 }
@@ -144,6 +159,35 @@ func (ui *UI) AnalyzePath(path string, _ *analyze.Dir) error {
 func (ui *UI) showDir(dir *analyze.Dir) {
 	sort.Sort(dir.Files)
 
+	for _, file := range dir.Files {
+		ui.printItem(file)
+	}
+}
+
+func (ui *UI) printTotalItem(file analyze.Item) {
+	var lineFormat string
+	if ui.UseColors {
+		lineFormat = "%20s %s\n"
+	} else {
+		lineFormat = "%9s %s\n"
+	}
+
+	var size int64
+	if ui.ShowApparentSize {
+		size = file.GetSize()
+	} else {
+		size = file.GetUsage()
+	}
+
+	fmt.Fprintf(
+		ui.output,
+		lineFormat,
+		ui.formatSize(size),
+		file.GetName(),
+	)
+}
+
+func (ui *UI) printItem(file analyze.Item) {
 	var lineFormat string
 	if ui.UseColors {
 		lineFormat = "%s %20s %s\n"
@@ -152,27 +196,24 @@ func (ui *UI) showDir(dir *analyze.Dir) {
 	}
 
 	var size int64
+	if ui.ShowApparentSize {
+		size = file.GetSize()
+	} else {
+		size = file.GetUsage()
+	}
 
-	for _, file := range dir.Files {
-		if ui.ShowApparentSize {
-			size = file.GetSize()
-		} else {
-			size = file.GetUsage()
-		}
-
-		if file.IsDir() {
-			fmt.Fprintf(ui.output,
-				lineFormat,
-				string(file.GetFlag()),
-				ui.formatSize(size),
-				ui.blue.Sprintf("/"+file.GetName()))
-		} else {
-			fmt.Fprintf(ui.output,
-				lineFormat,
-				string(file.GetFlag()),
-				ui.formatSize(size),
-				file.GetName())
-		}
+	if file.IsDir() {
+		fmt.Fprintf(ui.output,
+			lineFormat,
+			string(file.GetFlag()),
+			ui.formatSize(size),
+			ui.blue.Sprintf("/"+file.GetName()))
+	} else {
+		fmt.Fprintf(ui.output,
+			lineFormat,
+			string(file.GetFlag()),
+			ui.formatSize(size),
+			file.GetName())
 	}
 }
 
@@ -206,8 +247,7 @@ func (ui *UI) ReadAnalysis(input io.Reader) error {
 		}
 		runtime.GC()
 
-		links := make(analyze.AlreadyCountedHardlinks, 10)
-		dir.UpdateStats(links)
+		dir.UpdateStats(make(analyze.HardLinkedItems, 10))
 
 		if ui.ShowProgress {
 			doneChan <- struct{}{}

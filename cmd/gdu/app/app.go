@@ -28,6 +28,7 @@ type UI interface {
 	ReadAnalysis(input io.Reader) error
 	SetIgnoreDirPaths(paths []string)
 	SetIgnoreDirPatterns(paths []string) error
+	SetIgnoreFromFile(ignoreFile string) error
 	SetIgnoreHidden(value bool)
 	StartUILoop() error
 }
@@ -39,6 +40,7 @@ type Flags struct {
 	OutputFile        string
 	IgnoreDirs        []string
 	IgnoreDirPatterns []string
+	IgnoreFromFile    string
 	MaxCores          int
 	ShowDisks         bool
 	ShowApparentSize  bool
@@ -48,6 +50,7 @@ type Flags struct {
 	NoProgress        bool
 	NoCross           bool
 	NoHidden          bool
+	Summarize         bool
 }
 
 // App defines the main application
@@ -57,41 +60,59 @@ type App struct {
 	Istty       bool
 	Writer      io.Writer
 	TermApp     common.TermApplication
+	Screen      tcell.Screen
 	Getter      device.DevicesInfoGetter
 	PathChecker func(string) (fs.FileInfo, error)
 }
 
 // Run starts gdu main logic
-func (a *App) Run() error {
+func (a *App) Run() (err error) {
+	var (
+		f  *os.File
+		ui UI
+	)
+
 	if a.Flags.ShowVersion {
 		fmt.Fprintln(a.Writer, "Version:\t", build.Version)
 		fmt.Fprintln(a.Writer, "Built time:\t", build.Time)
 		fmt.Fprintln(a.Writer, "Built user:\t", build.User)
-		return nil
+		return
 	}
 
-	f, err := os.OpenFile(a.Flags.LogFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	f, err = os.OpenFile(a.Flags.LogFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
-		return fmt.Errorf("opening log file: %w", err)
+		err = fmt.Errorf("opening log file: %w", err)
+		return
 	}
-	defer f.Close()
+	defer func() {
+		cerr := f.Close()
+		if err == nil {
+			err = cerr
+		}
+	}()
 	log.SetOutput(f)
 
 	path := a.getPath()
-	ui, err := a.createUI()
+	ui, err = a.createUI()
 	if err != nil {
-		return err
+		return
 	}
 
-	if err := a.setNoCross(path); err != nil {
-		return err
+	if err = a.setNoCross(path); err != nil {
+		return
 	}
 
 	ui.SetIgnoreDirPaths(a.Flags.IgnoreDirs)
 
 	if len(a.Flags.IgnoreDirPatterns) > 0 {
-		if err := ui.SetIgnoreDirPatterns(a.Flags.IgnoreDirPatterns); err != nil {
-			return err
+		if err = ui.SetIgnoreDirPatterns(a.Flags.IgnoreDirPatterns); err != nil {
+			return
+		}
+	}
+
+	if a.Flags.IgnoreFromFile != "" {
+		if err = ui.SetIgnoreFromFile(a.Flags.IgnoreFromFile); err != nil {
+			return
 		}
 	}
 
@@ -101,11 +122,12 @@ func (a *App) Run() error {
 
 	a.setMaxProcs()
 
-	if err := a.runAction(ui, path); err != nil {
-		return err
+	if err = a.runAction(ui, path); err != nil {
+		return
 	}
 
-	return ui.StartUILoop()
+	err = ui.StartUILoop()
+	return
 }
 
 func (a *App) getPath() string {
@@ -135,7 +157,7 @@ func (a *App) createUI() (UI, error) {
 		if a.Flags.OutputFile == "-" {
 			output = os.Stdout
 		} else {
-			output, err = os.OpenFile(a.Flags.OutputFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+			output, err = os.OpenFile(a.Flags.OutputFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 			if err != nil {
 				return nil, fmt.Errorf("opening output file: %w", err)
 			}
@@ -155,9 +177,16 @@ func (a *App) createUI() (UI, error) {
 			!a.Flags.NoColor && a.Istty,
 			!a.Flags.NoProgress && a.Istty,
 			a.Flags.ShowApparentSize,
+			a.Flags.Summarize,
 		)
 	} else {
-		ui = tui.CreateUI(a.TermApp, !a.Flags.NoColor, a.Flags.ShowApparentSize)
+		ui = tui.CreateUI(
+			a.TermApp,
+			a.Screen,
+			os.Stdout,
+			!a.Flags.NoColor,
+			a.Flags.ShowApparentSize,
+		)
 
 		if !a.Flags.NoColor {
 			tview.Styles.TitleColor = tcell.NewRGBColor(27, 161, 227)
@@ -190,7 +219,7 @@ func (a *App) runAction(ui UI, path string) error {
 		if a.Flags.InputFile == "-" {
 			input = os.Stdin
 		} else {
-			input, err = os.OpenFile(a.Flags.InputFile, os.O_RDONLY, 0644)
+			input, err = os.OpenFile(a.Flags.InputFile, os.O_RDONLY, 0600)
 			if err != nil {
 				return fmt.Errorf("opening input file: %w", err)
 			}

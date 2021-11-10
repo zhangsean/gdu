@@ -1,14 +1,10 @@
 package tui
 
 import (
-	"fmt"
-	"sort"
-	"strings"
-	"time"
+	"io"
 
 	log "github.com/sirupsen/logrus"
 
-	"github.com/dundee/gdu/v5/build"
 	"github.com/dundee/gdu/v5/internal/common"
 	"github.com/dundee/gdu/v5/pkg/analyze"
 	"github.com/dundee/gdu/v5/pkg/device"
@@ -25,7 +21,10 @@ const helpText = `    [::b]up/down, k/j    [white:black:-]Move cursor up/down
                [::b]/    [white:black:-]Search items by name
                [::b]a    [white:black:-]Toggle between showing disk usage and apparent size
                [::b]c    [white:black:-]Show/hide file count
+               [::b]m    [white:black:-]Show/hide latest mtime
+               [::b]b    [white:black:-]Spawn shell in current directory
                [::b]q    [white:black:-]Quit gdu
+               [::b]Q    [white:black:-]Quit gdu and print current directory path
 
 Item under cursor:
                [::b]d    [white:black:-]Delete file or directory
@@ -37,12 +36,14 @@ Sort by (twice toggles asc/desc):
                [::b]n    [white:black:-]Sort by name (asc/desc)
                [::b]s    [white:black:-]Sort by size (asc/desc)
                [::b]C    [white:black:-]Sort by file count (asc/desc)
-`
+               [::b]M    [white:black:-]Sort by mtime (asc/desc)`
 
 // UI struct
 type UI struct {
 	*common.UI
 	app             common.TermApplication
+	screen          tcell.Screen
+	output          io.Writer
 	header          *tview.TextView
 	footer          *tview.Flex
 	footerLabel     *tview.TextView
@@ -59,6 +60,7 @@ type UI struct {
 	currentDirPath  string
 	askBeforeDelete bool
 	showItemCount   bool
+	showMtime       bool
 	filtering       bool
 	filterValue     string
 	sortBy          string
@@ -66,30 +68,35 @@ type UI struct {
 	done            chan struct{}
 	remover         func(*analyze.Dir, analyze.Item) error
 	emptier         func(*analyze.Dir, analyze.Item) error
+	exec            func(argv0 string, argv []string, envv []string) error
+	linkedItems     analyze.HardLinkedItems
 }
 
 // CreateUI creates the whole UI app
-func CreateUI(app common.TermApplication, useColors bool, showApparentSize bool) *UI {
+func CreateUI(app common.TermApplication, screen tcell.Screen, output io.Writer, useColors bool, showApparentSize bool) *UI {
 	ui := &UI{
 		UI: &common.UI{
 			UseColors:        useColors,
 			ShowApparentSize: showApparentSize,
 			Analyzer:         analyze.CreateAnalyzer(),
 		},
+		app:             app,
+		screen:          screen,
+		output:          output,
 		askBeforeDelete: true,
 		showItemCount:   false,
-		sortBy:          "size",
-		sortOrder:       "desc",
 		remover:         analyze.RemoveItemFromDir,
 		emptier:         analyze.EmptyFileFromDir,
+		exec:            Execute,
+		linkedItems:     make(analyze.HardLinkedItems, 10),
 	}
+	ui.resetSorting()
 
 	app.SetBeforeDrawFunc(func(screen tcell.Screen) bool {
 		screen.Clear()
 		return false
 	})
 
-	ui.app = app
 	ui.app.SetInputCapture(ui.keyPressed)
 
 	var textColor, textBgColor tcell.Color
@@ -151,6 +158,11 @@ func (ui *UI) StartUILoop() error {
 	return ui.app.Run()
 }
 
+func (ui *UI) resetSorting() {
+	ui.sortBy = "size"
+	ui.sortOrder = "desc"
+}
+
 func (ui *UI) rescanDir() {
 	ui.Analyzer.ResetProgress()
 	err := ui.AnalyzePath(ui.currentDirPath, ui.currentDir.Parent)
@@ -159,112 +171,11 @@ func (ui *UI) rescanDir() {
 	}
 }
 
-func (ui *UI) showDir() {
-	var (
-		totalUsage int64
-		totalSize  int64
-		itemCount  int
-	)
-
-	ui.currentDirPath = ui.currentDir.GetPath()
-	ui.currentDirLabel.SetText("[::b] --- " +
-		strings.TrimPrefix(ui.currentDirPath, build.RootPathPrefix) +
-		" ---").SetDynamicColors(true)
-
-	ui.table.Clear()
-
-	rowIndex := 0
-	if ui.currentDirPath != ui.topDirPath {
-		cell := tview.NewTableCell("                         [::b]/..")
-		cell.SetReference(ui.currentDir.Parent)
-		cell.SetStyle(tcell.Style{}.Foreground(tcell.ColorDefault))
-		ui.table.SetCell(0, 0, cell)
-		rowIndex++
-	}
-
-	ui.sortItems()
-
-	for i, item := range ui.currentDir.Files {
-		if ui.filterValue != "" && !strings.Contains(
-			strings.ToLower(item.GetName()),
-			strings.ToLower(ui.filterValue),
-		) {
-			continue
-		}
-
-		totalUsage += item.GetUsage()
-		totalSize += item.GetSize()
-		itemCount += item.GetItemCount()
-
-		cell := tview.NewTableCell(ui.formatFileRow(item))
-		cell.SetStyle(tcell.Style{}.Foreground(tcell.ColorDefault))
-		cell.SetReference(ui.currentDir.Files[i])
-
-		ui.table.SetCell(rowIndex, 0, cell)
-		rowIndex++
-	}
-
-	var footerNumberColor, footerTextColor string
-	if ui.UseColors {
-		footerNumberColor = "[#ffffff:#2479d0:b]"
-		footerTextColor = "[black:#2479d0:-]"
-	} else {
-		footerNumberColor = "[black:white:b]"
-		footerTextColor = "[black:white:-]"
-	}
-
-	ui.footerLabel.SetText(
-		" Total disk usage: " +
-			footerNumberColor +
-			ui.formatSize(totalUsage, true, false) +
-			" Apparent size: " +
-			footerNumberColor +
-			ui.formatSize(totalSize, true, false) +
-			" Items: " + footerNumberColor + fmt.Sprint(itemCount) +
-			footerTextColor +
-			" Sorting by: " + ui.sortBy + " " + ui.sortOrder)
-
-	ui.table.Select(0, 0)
-	ui.table.ScrollToBeginning()
-
-	if !ui.filtering {
-		ui.app.SetFocus(ui.table)
-	}
-}
-
-func (ui *UI) sortItems() {
-	if ui.sortBy == "size" {
-		if ui.ShowApparentSize {
-			if ui.sortOrder == "desc" {
-				sort.Sort(analyze.ByApparentSize(ui.currentDir.Files))
-			} else {
-				sort.Sort(sort.Reverse(analyze.ByApparentSize(ui.currentDir.Files)))
-			}
-		} else {
-			if ui.sortOrder == "desc" {
-				sort.Sort(ui.currentDir.Files)
-			} else {
-				sort.Sort(sort.Reverse(ui.currentDir.Files))
-			}
-		}
-	}
-	if ui.sortBy == "itemCount" {
-		if ui.sortOrder == "desc" {
-			sort.Sort(analyze.ByItemCount(ui.currentDir.Files))
-		} else {
-			sort.Sort(sort.Reverse(analyze.ByItemCount(ui.currentDir.Files)))
-		}
-	}
-	if ui.sortBy == "name" {
-		if ui.sortOrder == "desc" {
-			sort.Sort(analyze.ByName(ui.currentDir.Files))
-		} else {
-			sort.Sort(sort.Reverse(analyze.ByName(ui.currentDir.Files)))
-		}
-	}
-}
-
 func (ui *UI) fileItemSelected(row, column int) {
+	if ui.currentDir == nil {
+		return
+	}
+
 	origDir := ui.currentDir
 	selectedDir := ui.table.GetCell(row, column).GetReference().(analyze.Item)
 	if !selectedDir.IsDir() {
@@ -294,6 +205,8 @@ func (ui *UI) deviceItemSelected(row, column int) {
 	if err != nil {
 		log.Printf("Creating path patterns for other devices failed: %s", paths)
 	}
+
+	ui.resetSorting()
 
 	err = ui.AnalyzePath(selectedDevice.MountPoint, nil)
 	if err != nil {
@@ -332,98 +245,4 @@ func (ui *UI) confirmDeletion(shouldEmpty bool) {
 	modal.SetBorderColor(tcell.ColorDefault)
 
 	ui.pages.AddPage("confirm", modal, true, true)
-}
-
-func (ui *UI) showErr(msg string, err error) {
-	modal := tview.NewModal().
-		SetText(msg + ": " + err.Error()).
-		AddButtons([]string{"ok"}).
-		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
-			ui.pages.RemovePage("error")
-		})
-
-	if !ui.UseColors {
-		modal.SetBackgroundColor(tcell.ColorGray)
-	}
-
-	ui.pages.AddPage("error", modal, true, true)
-}
-
-func (ui *UI) setSorting(newOrder string) {
-	if newOrder == ui.sortBy {
-		if ui.sortOrder == "asc" {
-			ui.sortOrder = "desc"
-		} else {
-			ui.sortOrder = "asc"
-		}
-	} else {
-		ui.sortBy = newOrder
-		ui.sortOrder = "asc"
-	}
-	ui.showDir()
-}
-
-func (ui *UI) updateProgress() {
-	color := "[white:black:b]"
-	if ui.UseColors {
-		color = "[red:black:b]"
-	}
-
-	progressChan := ui.Analyzer.GetProgressChan()
-	doneChan := ui.Analyzer.GetDoneChan()
-
-	var progress analyze.CurrentProgress
-
-	for {
-		select {
-		case progress = <-progressChan:
-		case <-doneChan:
-			return
-		}
-
-		func(itemCount int, totalSize int64, currentItem string) {
-			ui.app.QueueUpdateDraw(func() {
-				ui.progress.SetText("Total items: " +
-					color +
-					common.FormatNumber(int64(itemCount)) +
-					"[white:black:-] size: " +
-					color +
-					ui.formatSize(totalSize, false, false) +
-					"[white:black:-]\nCurrent item: [white:black:b]" +
-					currentItem)
-			})
-		}(progress.ItemCount, progress.TotalSize, progress.CurrentItemName)
-
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-func (ui *UI) showHelp() {
-	text := tview.NewTextView().SetDynamicColors(true)
-	text.SetBorder(true).SetBorderPadding(2, 2, 2, 2)
-	text.SetBorderColor(tcell.ColorDefault)
-	text.SetTitle(" gdu help ")
-
-	if ui.UseColors {
-		text.SetText(
-			strings.ReplaceAll(
-				strings.ReplaceAll(helpText, "[::b]", "[red]"),
-				"[white:black:-]",
-				"[white]",
-			),
-		)
-	} else {
-		text.SetText(helpText)
-	}
-
-	flex := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(text, 27, 1, false).
-			AddItem(nil, 0, 1, false), 80, 1, false).
-		AddItem(nil, 0, 1, false)
-
-	ui.help = flex
-	ui.pages.AddPage("help", flex, true, true)
 }

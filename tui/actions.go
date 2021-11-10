@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strings"
 
 	"github.com/dundee/gdu/v5/build"
@@ -27,39 +28,12 @@ func (ui *UI) ListDevices(getter device.DevicesInfoGetter) error {
 		return err
 	}
 
-	ui.table.SetCell(0, 0, tview.NewTableCell("Device name").SetSelectable(false))
-	ui.table.SetCell(0, 1, tview.NewTableCell("Size").SetSelectable(false))
-	ui.table.SetCell(0, 2, tview.NewTableCell("Used").SetSelectable(false))
-	ui.table.SetCell(0, 3, tview.NewTableCell("Used part").SetSelectable(false))
-	ui.table.SetCell(0, 4, tview.NewTableCell("Free").SetSelectable(false))
-	ui.table.SetCell(0, 5, tview.NewTableCell("Mount point").SetSelectable(false))
-
-	var textColor, sizeColor string
-	if ui.UseColors {
-		textColor = "[#3498db:-:b]"
-		sizeColor = "[#edb20a:-:b]"
-	} else {
-		textColor = "[white:-:b]"
-		sizeColor = "[white:-:b]"
-	}
-
-	for i, device := range ui.devices {
-		ui.table.SetCell(i+1, 0, tview.NewTableCell(textColor+device.Name).SetReference(ui.devices[i]))
-		ui.table.SetCell(i+1, 1, tview.NewTableCell(ui.formatSize(device.Size, false, true)))
-		ui.table.SetCell(i+1, 2, tview.NewTableCell(sizeColor+ui.formatSize(device.Size-device.Free, false, true)))
-		ui.table.SetCell(i+1, 3, tview.NewTableCell(getDeviceUsagePart(device)))
-		ui.table.SetCell(i+1, 4, tview.NewTableCell(ui.formatSize(device.Free, false, true)))
-		ui.table.SetCell(i+1, 5, tview.NewTableCell(textColor+device.MountPoint))
-	}
-
-	ui.table.Select(1, 0)
-	ui.footerLabel.SetText("")
-	ui.table.SetSelectedFunc(ui.deviceItemSelected)
+	ui.showDevices()
 
 	return nil
 }
 
-// AnalyzePath analyzes recursively disk usage in given path
+// AnalyzePath analyzes recursively disk usage for given path
 func (ui *UI) AnalyzePath(path string, parentDir *analyze.Dir) error {
 	ui.progress = tview.NewTextView().SetText("Scanning...")
 	ui.progress.SetBorder(true).SetBorderPadding(2, 2, 2, 2)
@@ -80,22 +54,23 @@ func (ui *UI) AnalyzePath(path string, parentDir *analyze.Dir) error {
 	go ui.updateProgress()
 
 	go func() {
-		ui.currentDir = ui.Analyzer.AnalyzeDir(path, ui.CreateIgnoreFunc())
-		runtime.GC()
+		defer debug.SetGCPercent(debug.SetGCPercent(-1))
+		currentDir := ui.Analyzer.AnalyzeDir(path, ui.CreateIgnoreFunc())
+		debug.FreeOSMemory()
 
 		if parentDir != nil {
-			ui.currentDir.Parent = parentDir
-			parentDir.Files = parentDir.Files.RemoveByName(ui.currentDir.Name)
-			parentDir.Files.Append(ui.currentDir)
-
-			links := make(analyze.AlreadyCountedHardlinks, 10)
-			ui.topDir.UpdateStats(links)
+			currentDir.Parent = parentDir
+			parentDir.Files = parentDir.Files.RemoveByName(currentDir.Name)
+			parentDir.Files.Append(currentDir)
 		} else {
 			ui.topDirPath = path
-			ui.topDir = ui.currentDir
+			ui.topDir = currentDir
 		}
 
+		ui.topDir.UpdateStats(ui.linkedItems)
+
 		ui.app.QueueUpdateDraw(func() {
+			ui.currentDir = currentDir
 			ui.showDir()
 			ui.pages.RemovePage("progress")
 		})
@@ -143,7 +118,7 @@ func (ui *UI) ReadAnalysis(input io.Reader) error {
 		ui.topDirPath = ui.currentDir.GetPath()
 		ui.topDir = ui.currentDir
 
-		links := make(analyze.AlreadyCountedHardlinks, 10)
+		links := make(analyze.HardLinkedItems, 10)
 		ui.topDir.UpdateStats(links)
 
 		ui.app.QueueUpdateDraw(func() {
@@ -220,6 +195,10 @@ func (ui *UI) deleteSelected(shouldEmpty bool) {
 }
 
 func (ui *UI) showFile() *tview.TextView {
+	if ui.currentDir == nil {
+		return nil
+	}
+
 	row, column := ui.table.GetSelection()
 	selectedFile := ui.table.GetCell(row, column).GetReference().(analyze.Item)
 	if selectedFile.IsDir() {
@@ -262,7 +241,11 @@ func (ui *UI) showFile() *tview.TextView {
 
 	file.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Rune() == 'q' || event.Key() == tcell.KeyESC {
-			f.Close()
+			err = f.Close()
+			if err != nil {
+				ui.showErr("Error closing file", err)
+				return event
+			}
 			ui.currentDirLabel.SetText("[::b] --- " +
 				strings.TrimPrefix(ui.currentDirPath, build.RootPathPrefix) +
 				" ---").SetDynamicColors(true)
@@ -301,19 +284,21 @@ func (ui *UI) showFile() *tview.TextView {
 }
 
 func (ui *UI) showInfo() {
+	if ui.currentDir == nil {
+		return
+	}
+
 	var content, numberColor string
 	row, column := ui.table.GetSelection()
 	selectedFile := ui.table.GetCell(row, column).GetReference().(analyze.Item)
-
-	if selectedFile == ui.currentDir.Parent {
-		return
-	}
 
 	if ui.UseColors {
 		numberColor = "[#e67100::b]"
 	} else {
 		numberColor = "[::b]"
 	}
+
+	linesCount := 12
 
 	text := tview.NewTextView().SetDynamicColors(true)
 	text.SetBorder(true).SetBorderPadding(2, 2, 2, 2)
@@ -332,13 +317,22 @@ func (ui *UI) showInfo() {
 	content += numberColor + ui.formatSize(selectedFile.GetSize(), false, true)
 	content += fmt.Sprintf(" (%s%d[-::] B)", numberColor, selectedFile.GetSize()) + "\n"
 
+	if selectedFile.GetMultiLinkedInode() > 0 {
+		linkedItems := ui.linkedItems[selectedFile.GetMultiLinkedInode()]
+		linesCount += 2 + len(linkedItems)
+		content += "\nHard-linked files:\n"
+		for _, linkedItem := range linkedItems {
+			content += "\t" + linkedItem.GetPath() + "\n"
+		}
+	}
+
 	text.SetText(content)
 
 	flex := tview.NewFlex().
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(nil, 0, 1, false).
-			AddItem(text, 13, 1, false).
+			AddItem(text, linesCount, 1, false).
 			AddItem(nil, 0, 1, false), 80, 1, false).
 		AddItem(nil, 0, 1, false)
 

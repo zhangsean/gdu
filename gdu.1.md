@@ -1,5 +1,5 @@
 ---
-date: Jan 2021
+date: {{date}}
 section: 1
 title: gdu
 ---
@@ -30,6 +30,8 @@ ignore (separated by comma)
 **-I**, **\--ignore-dirs-pattern** Absolute path patterns to
 ignore (separated by comma)
 
+**-X**, **\--ignore-from** Read absolute path patterns to ignore from file
+
 **-l**, **\--log-file**=\"/dev/null\" Path to a logfile
 
 **-m**, **\--max-cores** Set max cores that GDU will use.
@@ -38,12 +40,14 @@ ignore (separated by comma)
 
 **-x**, **\--no-cross**\[=false\] Do not cross filesystem boundaries
 
-**-H**, **\--no-hidden**\[=false\] Ignore hidden directories (beggining with dot)
+**-H**, **\--no-hidden**\[=false\] Ignore hidden directories (beginning with dot)
+
+**-n**, **\--non-interactive**\[=false\] Do not run in interactive mode
 
 **-p**, **\--no-progress**\[=false\] Do not show progress in
 non-interactive mode
 
-**-n**, **\--non-interactive**\[=false\] Do not run in interactive mode
+**-s**, **\--summarize**\[=false\] Show only a total in non-interactive mode
 
 **-d**, **\--show-disks**\[=false\] Show all mounted disks
 

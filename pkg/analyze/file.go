@@ -4,10 +4,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
 
-// AlreadyCountedHardlinks holds all files with hardlinks that have already been counted
-type AlreadyCountedHardlinks map[uint64]bool
+// HardLinkedItems maps inode number to array of all hard linked items
+type HardLinkedItems map[uint64]Files
 
 // Item is fs item (file or dir)
 type Item interface {
@@ -18,20 +19,23 @@ type Item interface {
 	GetSize() int64
 	GetType() string
 	GetUsage() int64
+	GetMtime() time.Time
 	GetItemCount() int
 	GetParent() *Dir
+	GetMultiLinkedInode() uint64
 	EncodeJSON(writer io.Writer, topLevel bool) error
-	getItemStats(links AlreadyCountedHardlinks) (int, int64, int64)
+	getItemStats(linkedItems HardLinkedItems) (int, int64, int64)
 }
 
 // File struct
 type File struct {
-	Flag   rune
+	Mtime  time.Time
+	Parent *Dir
 	Name   string
 	Size   int64
 	Usage  int64
-	Mli    uint64 // MutliLinkInode - Inode number of file with multiple links (hard link)
-	Parent *Dir
+	Mli    uint64
+	Flag   rune
 }
 
 // GetName returns name of dir
@@ -69,6 +73,11 @@ func (f *File) GetUsage() int64 {
 	return f.Usage
 }
 
+// GetMtime returns mtime of the file
+func (f *File) GetMtime() time.Time {
+	return f.Mtime
+}
+
 // GetType returns name type of item
 func (f *File) GetType() string {
 	switch f.Flag {
@@ -83,21 +92,26 @@ func (f *File) GetItemCount() int {
 	return 1
 }
 
-func (f *File) alreadyCounted(links AlreadyCountedHardlinks) bool {
-	mli := f.Mli
-	if mli > 0 {
-		if !links[mli] {
-			links[mli] = true
-			return false
-		}
-		f.Flag = 'H'
-		return true
-	}
-	return false
+// GetMultiLinkedInode returns inode number of multilinked file
+func (f *File) GetMultiLinkedInode() uint64 {
+	return f.Mli
 }
 
-func (f *File) getItemStats(links AlreadyCountedHardlinks) (int, int64, int64) {
-	if f.alreadyCounted(links) {
+func (f *File) alreadyCounted(linkedItems HardLinkedItems) bool {
+	mli := f.Mli
+	counted := false
+	if mli > 0 {
+		if _, ok := linkedItems[mli]; ok {
+			f.Flag = 'H'
+			counted = true
+		}
+		linkedItems[mli] = append(linkedItems[mli], f)
+	}
+	return counted
+}
+
+func (f *File) getItemStats(linkedItems HardLinkedItems) (int, int64, int64) {
+	if f.alreadyCounted(linkedItems) {
 		return 1, 0, 0
 	}
 	return 1, f.GetSize(), f.GetUsage()
@@ -107,8 +121,8 @@ func (f *File) getItemStats(links AlreadyCountedHardlinks) (int, int64, int64) {
 type Dir struct {
 	*File
 	BasePath  string
-	ItemCount int
 	Files     Files
+	ItemCount int
 }
 
 // GetType returns name type of item
@@ -134,21 +148,25 @@ func (f *Dir) GetPath() string {
 	return filepath.Join(f.Parent.GetPath(), f.Name)
 }
 
-func (f *Dir) getItemStats(links AlreadyCountedHardlinks) (int, int64, int64) {
-	f.UpdateStats(links)
+func (f *Dir) getItemStats(linkedItems HardLinkedItems) (int, int64, int64) {
+	f.UpdateStats(linkedItems)
 	return f.ItemCount, f.GetSize(), f.GetUsage()
 }
 
 // UpdateStats recursively updates size and item count
-func (f *Dir) UpdateStats(links AlreadyCountedHardlinks) {
+func (f *Dir) UpdateStats(linkedItems HardLinkedItems) {
 	totalSize := int64(4096)
 	totalUsage := int64(4096)
 	var itemCount int
 	for _, entry := range f.Files {
-		count, size, usage := entry.getItemStats(links)
+		count, size, usage := entry.getItemStats(linkedItems)
 		totalSize += size
 		totalUsage += usage
 		itemCount += count
+
+		if entry.GetMtime().After(f.Mtime) {
+			f.Mtime = entry.GetMtime()
+		}
 
 		switch entry.GetFlag() {
 		case '!', '.':
@@ -234,6 +252,13 @@ type ByName Files
 func (f ByName) Len() int           { return len(f) }
 func (f ByName) Swap(i, j int)      { f[i], f[j] = f[j], f[i] }
 func (f ByName) Less(i, j int) bool { return f[i].GetName() > f[j].GetName() }
+
+// ByMtime sorts files by name
+type ByMtime Files
+
+func (f ByMtime) Len() int           { return len(f) }
+func (f ByMtime) Swap(i, j int)      { f[i], f[j] = f[j], f[i] }
+func (f ByMtime) Less(i, j int) bool { return f[i].GetMtime().After(f[j].GetMtime()) }
 
 // RemoveItemFromDir removes item from dir
 func RemoveItemFromDir(dir *Dir, item Item) error {

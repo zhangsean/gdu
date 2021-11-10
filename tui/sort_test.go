@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/dundee/gdu/v5/internal/testanalyze"
@@ -23,9 +24,9 @@ func TestSortByApparentSizeAsc(t *testing.T) {
 
 	assert.Equal(t, 4, ui.table.GetRowCount())
 	assert.Contains(t, ui.table.GetCell(0, 0).Text, "ddd")
-	assert.Contains(t, ui.table.GetCell(1, 0).Text, "ccc")
+	assert.Contains(t, ui.table.GetCell(1, 0).Text, "aaa")
 	assert.Contains(t, ui.table.GetCell(2, 0).Text, "bbb")
-	assert.Contains(t, ui.table.GetCell(3, 0).Text, "aaa")
+	assert.Contains(t, ui.table.GetCell(3, 0).Text, "ccc")
 }
 
 func TestAnalyzeBySize(t *testing.T) {
@@ -43,9 +44,9 @@ func TestSortBySizeAsc(t *testing.T) {
 
 	assert.Equal(t, 4, ui.table.GetRowCount())
 	assert.Contains(t, ui.table.GetCell(0, 0).Text, "ddd")
-	assert.Contains(t, ui.table.GetCell(1, 0).Text, "ccc")
+	assert.Contains(t, ui.table.GetCell(1, 0).Text, "aaa")
 	assert.Contains(t, ui.table.GetCell(2, 0).Text, "bbb")
-	assert.Contains(t, ui.table.GetCell(3, 0).Text, "aaa")
+	assert.Contains(t, ui.table.GetCell(3, 0).Text, "ccc")
 }
 
 func TestAnalyzeByName(t *testing.T) {
@@ -82,6 +83,26 @@ func TestAnalyzeByItemCountAsc(t *testing.T) {
 	ui := getAnalyzedPathWithSorting("itemCount", "asc", false)
 
 	assert.Equal(t, 4, ui.table.GetRowCount())
+	assert.Contains(t, ui.table.GetCell(0, 0).Text, "aaa")
+	assert.Contains(t, ui.table.GetCell(1, 0).Text, "bbb")
+	assert.Contains(t, ui.table.GetCell(2, 0).Text, "ccc")
+	assert.Contains(t, ui.table.GetCell(3, 0).Text, "ddd")
+}
+
+func TestAnalyzeByMtime(t *testing.T) {
+	ui := getAnalyzedPathWithSorting("mtime", "desc", false)
+
+	assert.Equal(t, 4, ui.table.GetRowCount())
+	assert.Contains(t, ui.table.GetCell(0, 0).Text, "aaa")
+	assert.Contains(t, ui.table.GetCell(1, 0).Text, "bbb")
+	assert.Contains(t, ui.table.GetCell(2, 0).Text, "ccc")
+	assert.Contains(t, ui.table.GetCell(3, 0).Text, "ddd")
+}
+
+func TestAnalyzeByMtimeAsc(t *testing.T) {
+	ui := getAnalyzedPathWithSorting("mtime", "asc", false)
+
+	assert.Equal(t, 4, ui.table.GetRowCount())
 	assert.Contains(t, ui.table.GetCell(0, 0).Text, "ddd")
 	assert.Contains(t, ui.table.GetCell(1, 0).Text, "ccc")
 	assert.Contains(t, ui.table.GetCell(2, 0).Text, "bbb")
@@ -102,9 +123,44 @@ func TestSetSorting(t *testing.T) {
 	assert.Equal(t, "asc", ui.sortOrder)
 }
 
+func TestSortDevicesByName(t *testing.T) {
+	app, simScreen := testapp.CreateTestAppWithSimScreen(50, 50)
+	defer simScreen.Fini()
+
+	ui := CreateUI(app, simScreen, &bytes.Buffer{}, true, true)
+	err := ui.ListDevices(getDevicesInfoMock())
+
+	assert.Nil(t, err)
+
+	ui.setSorting("name") // sort by name asc
+	assert.Equal(t, "/dev/boot", ui.devices[0].Name)
+
+	ui.setSorting("name") // sort by name desc
+	assert.Equal(t, "/dev/root", ui.devices[0].Name)
+}
+
+func TestSortDevicesByUsedSize(t *testing.T) {
+	app, simScreen := testapp.CreateTestAppWithSimScreen(50, 50)
+	defer simScreen.Fini()
+
+	ui := CreateUI(app, simScreen, &bytes.Buffer{}, true, true)
+	err := ui.ListDevices(getDevicesInfoMock())
+
+	assert.Nil(t, err)
+
+	ui.setSorting("size") // sort by used size asc
+	assert.Equal(t, "/dev/boot", ui.devices[0].Name)
+
+	ui.setSorting("size") // sort by used size desc
+	assert.Equal(t, "/dev/root", ui.devices[0].Name)
+}
+
 func getAnalyzedPathWithSorting(sortBy string, sortOrder string, apparentSize bool) *UI {
+	simScreen := testapp.CreateSimScreen(50, 50)
+	defer simScreen.Fini()
+
 	app := testapp.CreateMockedApp(true)
-	ui := CreateUI(app, false, apparentSize)
+	ui := CreateUI(app, simScreen, &bytes.Buffer{}, false, apparentSize)
 	ui.Analyzer = &testanalyze.MockedAnalyzer{}
 	ui.done = make(chan struct{})
 	ui.sortBy = sortBy

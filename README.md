@@ -1,7 +1,7 @@
 # go DiskUsage()
 
 [![Build Status](https://travis-ci.com/dundee/gdu.svg?branch=master)](https://travis-ci.com/dundee/gdu)
-[![Coverage Status](https://coveralls.io/repos/github/dundee/gdu/badge.svg?branch=master)](https://coveralls.io/github/dundee/gdu?branch=master)
+[![Codecov](https://codecov.io/gh/dundee/gdu/branch/master/graph/badge.svg)](https://codecov.io/gh/dundee/gdu)
 [![Go Report Card](https://goreportcard.com/badge/github.com/dundee/gdu)](https://goreportcard.com/report/github.com/dundee/gdu)
 [![Maintainability](https://api.codeclimate.com/v1/badges/30d793274607f599e658/maintainability)](https://codeclimate.com/github/dundee/gdu/maintainability)
 [![CodeScene Code Health](https://codescene.io/projects/13129/status-badges/code-health)](https://codescene.io/projects/13129)
@@ -31,9 +31,9 @@ Using curl:
 
     yay -S gdu
 
-[Debian](https://packages.debian.org/sid/gdu):
+[Debian](https://packages.debian.org/bullseye/gdu):
 
-    dpkg -i gdu_*_amd64.deb
+    apt install gdu
 
 [Ubuntu](https://launchpad.net/~daniel-milde/+archive/ubuntu/gdu)
 
@@ -64,8 +64,7 @@ Using curl:
 
 [Go](https://pkg.go.dev/github.com/dundee/gdu):
 
-    go get -u github.com/dundee/gdu/v5/cmd/gdu
-
+    go install github.com/dundee/gdu/v5/cmd/gdu@latest
 
 ## Usage
 
@@ -76,6 +75,7 @@ Flags:
   -h, --help                          help for gdu
   -i, --ignore-dirs strings           Absolute paths to ignore (separated by comma) (default [/proc,/dev,/sys,/run])
   -I, --ignore-dirs-pattern strings   Absolute path patterns to ignore (separated by comma)
+  -X, --ignore-from string            Read absolute path patterns to ignore from file
   -f, --input-file string             Import analysis from JSON file
   -l, --log-file string               Path to a logfile (default "/dev/null")
   -m, --max-cores int                 Set max cores that GDU will use. 8 cores available (default 8)
@@ -87,6 +87,7 @@ Flags:
   -o, --output-file string            Export all info into file as JSON
   -a, --show-apparent-size            Show apparent size
   -d, --show-disks                    Show all mounted disks
+  -s, --summarize                     Show only a total in non-interactive mode
   -v, --version                       Print version
 ```
 
@@ -99,20 +100,24 @@ Flags:
     gdu -l ./gdu.log <some_dir>           # write errors to log file
     gdu -i /sys,/proc /                   # ignore some paths
     gdu -I '.*[abc]+'                     # ignore paths by regular pattern
+    gdu -X ignore_file /                  # ignore paths by regular patterns from file
     gdu -c /                              # use only white/gray/black colors
 
     gdu -n /                              # only print stats, do not start interactive mode
     gdu -np /                             # do not show progress, useful when using its output in a script
+    gdu -nps /some/dir                    # show only total usage for given dir
     gdu / > file                          # write stats to file, do not start interactive mode
 
     gdu -o- / | gzip -c >report.json.gz   # write all info to JSON file for later analysis
     zcat report.json.gz | gdu -f-         # read analysis from file
 
+## Modes
+
 Gdu has three modes: interactive (default), non-interactive and export.
 
 Non-interactive mode is started automtically when TTY is not detected (using [go-isatty](https://github.com/mattn/go-isatty)), for example if the output is being piped to a file, or it can be started explicitly by using a flag.
 
-Export mode (flag `-o`) outputs all usage data as JSON, which can then be later opened using the `-f` flag.
+Export mode (flag `-o`) outputs all usage data as JSON, which can be later opened using the `-f` flag.
 
 Hard links are counted only once.
 
@@ -135,10 +140,9 @@ flag with following meaning:
 
     make test
 
-
 ## Benchmarks
 
-Benchmarks performed on 50G directory (100k directories, 400k files) on 500 GB SSD using [hyperfine](https://github.com/sharkdp/hyperfine).
+Benchmarks were performed on 50G directory (100k directories, 400k files) on 500 GB SSD using [hyperfine](https://github.com/sharkdp/hyperfine).
 See `benchmark` target in [Makefile](Makefile) for more info.
 
 ### Cold cache
@@ -147,26 +151,25 @@ Filesystem cache was cleared using `sync; echo 3 | sudo tee /proc/sys/vm/drop_ca
 
 | Command | Mean [s] | Min [s] | Max [s] | Relative |
 |:---|---:|---:|---:|---:|
-| `gdu -npc ~` | 3.714 ± 0.036 | 3.685 | 3.809 | 1.00 |
-| `dua ~` | 4.703 ± 0.011 | 4.691 | 4.721 | 1.27 ± 0.01 |
-| `duc index ~` | 20.776 ± 0.093 | 20.591 | 20.924 | 5.59 ± 0.06 |
-| `ncdu -0 -o /dev/null ~` | 20.933 ± 0.113 | 20.757 | 21.073 | 5.64 ± 0.06 |
-| `diskus ~` | 3.747 ± 0.027 | 3.707 | 3.779 | 1.01 ± 0.01 |
-| `du -hs ~` | 20.096 ± 0.128 | 19.916 | 20.313 | 5.41 ± 0.06 |
-| `dust -d0 ~` | 16.281 ± 0.118 | 16.148 | 16.490 | 4.38 ± 0.05 |
-
+| `gdu -npc ~` | 5.377 ± 0.479 | 5.132 | 6.719 | 1.07 ± 0.10 |
+| `dua ~` | 6.431 ± 0.015 | 6.417 | 6.465 | 1.28 ± 0.01 |
+| `duc index ~` | 30.432 ± 2.965 | 29.321 | 38.866 | 6.07 ± 0.59 |
+| `ncdu -0 -o /dev/null ~` | 29.435 ± 0.145 | 29.188 | 29.711 | 5.87 ± 0.06 |
+| `diskus ~` | 5.013 ± 0.042 | 4.948 | 5.087 | 1.00 |
+| `du -hs ~` | 29.445 ± 3.223 | 28.337 | 38.616 | 5.87 ± 0.64 |
+| `dust -d0 ~` | 6.673 ± 0.483 | 6.337 | 7.788 | 1.33 ± 0.10 |
 
 ### Warm cache
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `gdu -npc ~` | 643.5 ± 11.3 | 623.8 | 659.9 | 1.99 ± 0.12 |
-| `dua ~` | 389.7 ± 13.0 | 374.2 | 410.4 | 1.20 ± 0.08 |
-| `duc index ~` | 1241.1 ± 19.6 | 1205.4 | 1274.9 | 3.84 ± 0.23 |
-| `ncdu -0 -o /dev/null ~` | 1846.7 ± 11.9 | 1823.0 | 1859.9 | 5.71 ± 0.33 |
-| `diskus ~` | 323.4 ± 18.8 | 302.1 | 362.2 | 1.00 |
-| `du -hs ~` | 1027.7 ± 9.7 | 1009.0 | 1037.5 | 3.18 ± 0.19 |
-| `dust -d0 ~` | 8864.4 ± 35.9 | 8798.8 | 8906.6 | 27.41 ± 1.60 |
+| `gdu -npc ~` | 710.8 ± 11.0 | 692.8 | 730.7 | 1.67 ± 0.10 |
+| `dua ~` | 532.0 ± 16.5 | 496.6 | 551.2 | 1.25 ± 0.08 |
+| `duc index ~` | 1706.6 ± 23.2 | 1668.1 | 1729.3 | 4.01 ± 0.23 |
+| `ncdu -0 -o /dev/null ~` | 2399.4 ± 12.5 | 2388.5 | 2425.2 | 5.64 ± 0.32 |
+| `diskus ~` | 425.1 ± 23.7 | 393.3 | 469.7 | 1.00 |
+| `du -hs ~` | 1397.0 ± 19.6 | 1378.2 | 1435.5 | 3.29 ± 0.19 |
+| `dust -d0 ~` | 663.3 ± 9.8 | 645.0 | 679.5 | 1.56 ± 0.09 |
 
 ## Alternatives
 

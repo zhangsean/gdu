@@ -2,6 +2,7 @@ package testanalyze
 
 import (
 	"errors"
+	"time"
 
 	"github.com/dundee/gdu/v5/pkg/analyze"
 )
@@ -16,44 +17,46 @@ func (a *MockedAnalyzer) AnalyzeDir(path string, ignore analyze.ShouldDirBeIgnor
 			Name:  "test_dir",
 			Usage: 1e12 + 1,
 			Size:  1e12 + 2,
+			Mtime: time.Date(2021, 8, 27, 22, 23, 24, 0, time.UTC),
 		},
 		BasePath:  ".",
 		ItemCount: 12,
 	}
-	file := &analyze.Dir{
+	dir2 := &analyze.Dir{
 		File: &analyze.File{
 			Name:   "aaa",
 			Usage:  1e12 + 1,
 			Size:   1e12 + 2,
+			Mtime:  time.Date(2021, 8, 27, 22, 23, 27, 0, time.UTC),
 			Parent: dir,
 		},
-		ItemCount: 5,
 	}
-	file2 := &analyze.Dir{
+	dir3 := &analyze.Dir{
 		File: &analyze.File{
 			Name:   "bbb",
 			Usage:  1e9 + 1,
 			Size:   1e9 + 2,
+			Mtime:  time.Date(2021, 8, 27, 22, 23, 26, 0, time.UTC),
 			Parent: dir,
 		},
-		ItemCount: 3,
 	}
-	file3 := &analyze.Dir{
+	dir4 := &analyze.Dir{
 		File: &analyze.File{
 			Name:   "ccc",
 			Usage:  1e6 + 1,
 			Size:   1e6 + 2,
+			Mtime:  time.Date(2021, 8, 27, 22, 23, 25, 0, time.UTC),
 			Parent: dir,
 		},
-		ItemCount: 2,
 	}
-	file4 := &analyze.File{
+	file := &analyze.File{
 		Name:   "ddd",
 		Usage:  1e3 + 1,
 		Size:   1e3 + 2,
+		Mtime:  time.Date(2021, 8, 27, 22, 23, 24, 0, time.UTC),
 		Parent: dir,
 	}
-	dir.Files = analyze.Files{file, file2, file3, file4}
+	dir.Files = analyze.Files{dir2, dir3, dir4, file}
 
 	return dir
 }

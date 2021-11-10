@@ -11,6 +11,11 @@ type Device struct {
 	Free       int64
 }
 
+// GetUsage returns used size of device
+func (d Device) GetUsage() int64 {
+	return d.Size - d.Free
+}
+
 // DevicesInfoGetter is type for GetDevicesInfo function
 type DevicesInfoGetter interface {
 	GetMounts() (Devices, error)
@@ -19,6 +24,24 @@ type DevicesInfoGetter interface {
 
 // Devices if slice of Device items
 type Devices []*Device
+
+// ByUsedSize sorts devices by used size
+type ByUsedSize Devices
+
+func (f ByUsedSize) Len() int      { return len(f) }
+func (f ByUsedSize) Swap(i, j int) { f[i], f[j] = f[j], f[i] }
+func (f ByUsedSize) Less(i, j int) bool {
+	return f[i].GetUsage() > f[j].GetUsage()
+}
+
+// ByName sorts devices by device name
+type ByName Devices
+
+func (f ByName) Len() int      { return len(f) }
+func (f ByName) Swap(i, j int) { f[i], f[j] = f[j], f[i] }
+func (f ByName) Less(i, j int) bool {
+	return f[i].Name > f[j].Name
+}
 
 // GetNestedMountpointsPaths returns paths of nested mount points
 func GetNestedMountpointsPaths(path string, mounts Devices) []string {

@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+
 	"github.com/dundee/gdu/v5/pkg/analyze"
 	"github.com/gdamore/tcell/v2"
 )
@@ -16,23 +18,59 @@ func (ui *UI) keyPressed(key *tcell.EventKey) *tcell.EventKey {
 	if key.Key() == tcell.KeyEsc || key.Rune() == 'q' {
 		if ui.pages.HasPage("help") {
 			ui.pages.RemovePage("help")
-			_, page := ui.pages.GetFrontPage()
-			ui.app.SetFocus(page)
+			ui.app.SetFocus(ui.table)
 			return nil
 		}
 		if ui.pages.HasPage("info") {
 			ui.pages.RemovePage("info")
-			_, page := ui.pages.GetFrontPage()
-			ui.app.SetFocus(page)
+			ui.app.SetFocus(ui.table)
 			return nil
 		}
 	}
 
+	if ui.pages.HasPage("info") {
+		switch key.Rune() {
+		case 'i':
+			ui.pages.RemovePage("info")
+			ui.app.SetFocus(ui.table)
+			return nil
+		case '?':
+			return nil
+		}
+
+		if key.Key() == tcell.KeyUp ||
+			key.Key() == tcell.KeyDown ||
+			key.Rune() == 'j' ||
+			key.Rune() == 'k' {
+			row, column := ui.table.GetSelection()
+			if (key.Key() == tcell.KeyUp || key.Rune() == 'k') && row > 0 {
+				row--
+			} else if (key.Key() == tcell.KeyDown || key.Rune() == 'j') &&
+				row+1 < ui.table.GetRowCount() {
+				row++
+			}
+			ui.table.Select(row, column)
+		}
+		defer ui.showInfo() // refresh file info after any change
+	}
+
 	switch key.Rune() {
+	case 'Q':
+		ui.app.Stop()
+		fmt.Fprintf(ui.output, "%s\n", ui.currentDirPath)
+		return nil
 	case 'q':
 		ui.app.Stop()
 		return nil
+	case 'b':
+		ui.spawnShell()
+		return nil
 	case '?':
+		if ui.pages.HasPage("help") {
+			ui.pages.RemovePage("help")
+			ui.app.SetFocus(ui.table)
+			return nil
+		}
 		ui.showHelp()
 	}
 
@@ -40,8 +78,7 @@ func (ui *UI) keyPressed(key *tcell.EventKey) *tcell.EventKey {
 		ui.pages.HasPage("progress") ||
 		ui.pages.HasPage("deleting") ||
 		ui.pages.HasPage("emptying") ||
-		ui.pages.HasPage("help") ||
-		ui.pages.HasPage("info") {
+		ui.pages.HasPage("help") {
 		return key
 	}
 
@@ -84,6 +121,13 @@ func (ui *UI) keyPressed(key *tcell.EventKey) *tcell.EventKey {
 			ui.showDir()
 			ui.table.Select(row, column)
 		}
+	case 'm':
+		ui.showMtime = !ui.showMtime
+		if ui.currentDir != nil {
+			row, column := ui.table.GetSelection()
+			ui.showDir()
+			ui.table.Select(row, column)
+		}
 	case 'r':
 		if ui.currentDir != nil {
 			ui.rescanDir()
@@ -94,12 +138,12 @@ func (ui *UI) keyPressed(key *tcell.EventKey) *tcell.EventKey {
 		ui.setSorting("itemCount")
 	case 'n':
 		ui.setSorting("name")
+	case 'M':
+		ui.setSorting("mtime")
 	case '/':
 		ui.showFilterInput()
-	default:
-		return key
 	}
-	return nil
+	return key
 }
 
 func (ui *UI) handleLeft() {
